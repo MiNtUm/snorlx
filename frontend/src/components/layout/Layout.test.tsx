@@ -102,4 +102,26 @@ describe("Layout", () => {
 
     expect(screen.getByText("Fetching repositories from GitHub...")).toBeInTheDocument();
   });
+
+  it("shows a failed sync instead of leaving the user guessing", () => {
+    mockUseSync.mockReturnValue({
+      sync: {
+        isSyncing: false,
+        syncedCount: 0,
+        totalToSync: 0,
+        progress: 0,
+        currentRepo: null,
+        error: "Failed to fetch repositories from GitHub",
+      },
+    });
+
+    render(
+      <Layout>
+        <div>Page Content</div>
+      </Layout>
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Sync failed: Failed to fetch repositories from GitHub");
+    expect(screen.queryByText("Syncing Repositories")).not.toBeInTheDocument();
+  });
 });

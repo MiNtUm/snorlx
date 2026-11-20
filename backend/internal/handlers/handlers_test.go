@@ -48,6 +48,11 @@ type mockStorage struct {
 	getRunByGitHubIDFunc        func(ctx context.Context, githubID int64) (*models.WorkflowRun, error)
 	listUsersWithRepoAccessFunc func(ctx context.Context, repoID int) ([]int, error)
 	getRepoByGitHubIDFunc       func(ctx context.Context, githubID int64) (*models.Repository, error)
+
+	// Sync hooks
+	upsertRepositoryFunc func(ctx context.Context, repo *models.Repository) (*models.Repository, error)
+	upsertWorkflowFunc   func(ctx context.Context, workflow *models.Workflow) (*models.Workflow, error)
+	getLatestScoreFunc   func(ctx context.Context, repoID int) (*models.RepositoryScore, error)
 }
 
 func (m *mockStorage) Close() error   { return nil }
@@ -107,6 +112,9 @@ func (m *mockStorage) GetRepositoryByGitHubID(ctx context.Context, githubID int6
 	return nil, nil
 }
 func (m *mockStorage) UpsertRepository(ctx context.Context, repo *models.Repository) (*models.Repository, error) {
+	if m.upsertRepositoryFunc != nil {
+		return m.upsertRepositoryFunc(ctx, repo)
+	}
 	return repo, nil
 }
 func (m *mockStorage) UpdateRepository(ctx context.Context, id int, repo *models.Repository) (*models.Repository, error) {
@@ -128,6 +136,9 @@ func (m *mockStorage) GetWorkflowByGitHubID(ctx context.Context, githubID int64)
 	return nil, nil
 }
 func (m *mockStorage) UpsertWorkflow(ctx context.Context, workflow *models.Workflow) (*models.Workflow, error) {
+	if m.upsertWorkflowFunc != nil {
+		return m.upsertWorkflowFunc(ctx, workflow)
+	}
 	return workflow, nil
 }
 func (m *mockStorage) UpdateWorkflow(ctx context.Context, id int, workflow *models.Workflow) (*models.Workflow, error) {
@@ -261,6 +272,9 @@ func (m *mockStorage) UpsertRepositoryScore(ctx context.Context, score *models.R
 	return score, nil
 }
 func (m *mockStorage) GetLatestRepositoryScore(ctx context.Context, repoID int) (*models.RepositoryScore, error) {
+	if m.getLatestScoreFunc != nil {
+		return m.getLatestScoreFunc(ctx, repoID)
+	}
 	return nil, nil
 }
 func (m *mockStorage) ListLatestRepositoryScores(ctx context.Context, userID int) ([]models.RepositoryScore, error) {
@@ -282,6 +296,8 @@ func newTestHandler(store *mockStorage) *Handler {
 		etags:         newETagCache(),
 		wakeActive:    make(chan struct{}, 1),
 		wakeDiscovery: make(chan struct{}, 1),
+		syncs:         newSyncTracker(),
+		wakeAutoSync:  make(chan struct{}, 1),
 		// ghClient, wsHub, scorer are nil; only test handlers that don't use them
 	}
 }

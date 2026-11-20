@@ -27,6 +27,15 @@ export function Layout({ children }: LayoutProps) {
         </main>
       </div>
 
+      {sync.error && !sync.isSyncing && (
+        <div
+          role="alert"
+          className="fixed bottom-4 right-4 z-50 max-w-sm rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/50 dark:bg-red-900/90 dark:text-red-100"
+        >
+          Sync failed: {sync.error}
+        </div>
+      )}
+
       {/* Global Live Sync Progress - Visible across all pages */}
       {sync.isSyncing && (
         <>

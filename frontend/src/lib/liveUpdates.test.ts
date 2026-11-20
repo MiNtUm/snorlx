@@ -80,7 +80,24 @@ describe("applyLiveUpdate", () => {
 		expect(invalidated(queryClient, keys)).toEqual(["summary", "trends"]);
 	});
 
-	it("sync events are left to SyncContext", () => {
+	it("sync:refresh reloads what a background sync may have stored, but not GitHub-backed or unrelated data", () => {
+		applyLiveUpdate(queryClient, { type: "sync:refresh", data: {} });
+
+		expect(invalidated(queryClient, keys)).toEqual([
+			"otherRunJobs",
+			"pipelines",
+			"repositories",
+			"runDetail",
+			"runJobs",
+			"runsList",
+			"summary",
+			"trends",
+			"workflowRuns",
+			"workflows",
+		]);
+	});
+
+	it("sync progress events are left to SyncContext", () => {
 		applyLiveUpdate(queryClient, { type: "sync:progress", data: { synced: 1, total: 2 } });
 
 		expect(invalidated(queryClient, keys)).toEqual([]);

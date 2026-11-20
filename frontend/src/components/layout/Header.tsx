@@ -20,7 +20,6 @@ import { useTheme } from "../../context/ThemeContext";
 import { useAuth } from "../../context/AuthContext";
 import { cn } from "../../lib/utils";
 import { NavLink, useNavigate } from "react-router-dom";
-import { api } from "../../services/api";
 
 const mobileNavigation = [
 	{ name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -47,12 +46,8 @@ export function Header() {
 	const handleSync = () => {
 		if (sync.isSyncing) return;
 
-		startSync();
-
-		// Fire and forget - progress and completion come via WebSocket
-		api.syncRepositories().catch(() => {
-			// Silent error handling - sync status is tracked via WebSocket
-		});
+		// Progress and completion come via WebSocket, with the status endpoint as a fallback
+		void startSync();
 	};
 
 	useEffect(() => {

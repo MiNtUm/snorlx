@@ -302,6 +302,10 @@ The app requests these OAuth scopes:
 
 Runs update on their own while somebody has a page visible. The browser reports its visibility over the WebSocket, and the backend runs a live poller for users with a visible page: every `RUN_POLL_INTERVAL` (default `10s`) it re-reads each queued or in-progress run and its jobs, and every six intervals it lists the newest runs of every visible repository to pick up runs started since the last sync. Every request is conditional (`If-None-Match`), so a resource that did not change answers `304`, costs no GitHub rate-limit budget and writes nothing. Changes are pushed to the browser over the WebSocket; a page that becomes visible again triggers a pass right away and refetches what it missed. While the socket is down, pages poll the backend (never GitHub) until it reconnects, and those requests count as presence for 45 seconds (the same applies to API token clients such as MCP). Background tabs and closed browsers mean no GitHub traffic. The **Refresh** buttons stay as an escape hatch: they run the same conditional passes right away. See [ADR 0007](docs/adr/0007-server-side-live-run-polling.md).
 
+### Automatic sync
+
+You press **Sync** once to import your repositories; after that the backend keeps them current. For users who are watching (the same rule as the live poller) and whose last sync started more than `AUTO_SYNC_INTERVAL` ago (default `30m`), it runs an incremental, silent sync: new repositories are imported in full, known repositories only re-read their workflows and newest runs when GitHub reports a change (conditional requests, `304` costs no rate-limit budget), and a repository score is recomputed only when it is older than 7 days or the repository was pushed to since it was taken (and the score is at least 6 hours old). Open views refetch when it stored something. The **Sync** button remains a full re-import (every repository, workflow, run and score) and shows its progress; a second sync cannot start while one runs. See [ADR 0008](docs/adr/0008-incremental-background-sync.md).
+
 ### Optional: Webhooks
 
 Webhooks deliver changes the instant GitHub reports them and let the poller answer `304` for everything it checks. Configure one in your repository or organization settings:
@@ -368,6 +372,7 @@ To serve the dashboard at `https://<host><base_path>` instead of `https://<host>
 | `SYNC_LIMIT`        | No       | `0` (all)   | Limit number of repos to sync                                                                                 |
 | `SYNC_REPOS`        | No       | -           | Comma-separated list of specific repos to sync                                                                |
 | `RUN_POLL_INTERVAL` | No       | `10s`       | How often active runs are refreshed from GitHub for watching users (conditional requests). Minimum `5s`, `0` disables the poller |
+| `AUTO_SYNC_INTERVAL` | No      | `30m`       | How often an incremental background sync runs for watching users who synced before (conditional requests). Minimum `5m`, `0` disables it |
 
 ## API Endpoints
 
@@ -396,7 +401,8 @@ All `/api` routes below (except `/api/auth/*` and the webhook receiver) require 
 - `GET /api/repositories/:id` - Get repository details
 - `GET /api/repositories/scores` - List latest repository scores (all repos)
 - `GET /api/repositories/:id/score` - Get latest score for a repository
-- `POST /api/repositories/sync` - Trigger repository sync
+- `POST /api/repositories/sync` - Trigger a full repository sync (`202`; `409` while a sync is already running)
+- `GET /api/repositories/sync/status` - State of the current or most recent sync (`running`, `manual`, `total`, `synced`, `current`, `error`)
 
 ### Workflows
 

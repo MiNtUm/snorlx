@@ -16,6 +16,28 @@ import type {
 } from "../types";
 import { API_URL } from "../lib/basePath";
 
+/** An error response from the backend; `status` is the HTTP status code. */
+export class ApiError extends Error {
+	constructor(
+		message: string,
+		public readonly status: number,
+	) {
+		super(message);
+		this.name = "ApiError";
+	}
+}
+
+/** State of the signed-in user's current or most recent repository sync. */
+export interface SyncStatus {
+	running: boolean;
+	/** True for a sync started with the Sync button; automatic background syncs are silent. */
+	manual: boolean;
+	total: number;
+	synced: number;
+	current: string;
+	error?: string;
+}
+
 async function fetchApi<T>(
 	endpoint: string,
 	options?: RequestInit,
@@ -31,7 +53,7 @@ async function fetchApi<T>(
 
 	if (!response.ok) {
 		const error = await response.text();
-		throw new Error(error || `HTTP error ${response.status}`);
+		throw new ApiError(error || `HTTP error ${response.status}`, response.status);
 	}
 
 	if (response.status === 204) {
@@ -73,6 +95,7 @@ export const repositoriesApi = {
 	get: (id: number) => fetchApi<Repository>(`/api/repositories/${id}`),
 	sync: () =>
 		fetchApi<{ status: string }>("/api/repositories/sync", { method: "POST" }),
+	syncStatus: () => fetchApi<SyncStatus>("/api/repositories/sync/status"),
 	syncRepo: (id: number) =>
 		fetchApi<{ status: string; workflows: number; runs: number }>(
 			`/api/repositories/${id}/sync`,
@@ -181,4 +204,5 @@ export const tokensApi = {
 // Convenience export for common operations
 export const api = {
 	syncRepositories: () => repositoriesApi.sync(),
+	syncStatus: () => repositoriesApi.syncStatus(),
 };

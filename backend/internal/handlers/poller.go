@@ -272,7 +272,7 @@ func (h *Handler) pollLoop(ctx context.Context, every time.Duration, wake <-chan
 // UserActivated is called by the WebSocket hub when a user's page becomes visible. Both loops run
 // a pass as soon as they are idle; repeated signals coalesce.
 func (h *Handler) UserActivated(int) {
-	for _, wake := range []chan struct{}{h.wakeActive, h.wakeDiscovery} {
+	for _, wake := range []chan struct{}{h.wakeActive, h.wakeDiscovery, h.wakeAutoSync} {
 		select {
 		case wake <- struct{}{}:
 		default:

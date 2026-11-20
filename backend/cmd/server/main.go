@@ -102,6 +102,15 @@ func main() {
 		log.Info().Msg("Live run poller disabled (RUN_POLL_INTERVAL=0); runs update through webhooks and manual refresh")
 	}
 
+	// Auto sync: incremental background sync of repositories, workflows and stale scores for
+	// watching users, so the manual Sync button is rarely needed
+	if cfg.AutoSyncInterval > 0 {
+		log.Info().Dur("interval", cfg.AutoSyncInterval).Msg("Automatic incremental sync enabled")
+		go h.RunAutoSync(maintenanceCtx, cfg.AutoSyncInterval)
+	} else {
+		log.Info().Msg("Automatic sync disabled (AUTO_SYNC_INTERVAL=0); repositories and workflows update through the Sync button")
+	}
+
 	// Setup router
 	r := chi.NewRouter()
 
@@ -173,6 +182,7 @@ func main() {
 			r.Get("/repositories/{id}", h.GetRepository)
 			r.Get("/repositories/{id}/score", h.GetRepositoryScore)
 			r.Post("/repositories/sync", h.SyncRepositories)
+			r.Get("/repositories/sync/status", h.SyncStatus)
 			r.Post("/repositories/{id}/sync", h.SyncRepository)
 			r.Post("/repositories/backfill-deployment-runs", h.BackfillDeploymentRuns)
 

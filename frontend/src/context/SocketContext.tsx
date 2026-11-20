@@ -1,7 +1,9 @@
 import {
 	createContext,
 	useContext,
+	useCallback,
 	useEffect,
+	useRef,
 	useState,
 	type ReactNode,
 } from "react";
@@ -9,14 +11,20 @@ import { useQueryClient } from "@tanstack/react-query";
 import { applyLiveUpdate, type LiveMessage } from "../lib/liveUpdates";
 import { BASE_PATH } from "../lib/basePath";
 
+type MessageListener = (message: LiveMessage) => void;
+
 interface SocketContextValue {
 	isConnected: boolean;
+	/** The newest message. Messages that arrive in one tick overwrite each other: use subscribe for ordered delivery. */
 	lastMessage: LiveMessage | null;
+	/** Calls listener once for every message, in order. Returns the unsubscribe function. */
+	subscribe: (listener: MessageListener) => () => void;
 }
 
 const SocketContext = createContext<SocketContextValue>({
 	isConnected: false,
 	lastMessage: null,
+	subscribe: () => () => {},
 });
 
 /** A page counts as active while it is visible; a background tab or minimized window is not. */
@@ -28,6 +36,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 	const [isConnected, setIsConnected] = useState(false);
 	const [lastMessage, setLastMessage] = useState<LiveMessage | null>(null);
 	const queryClient = useQueryClient();
+	const listeners = useRef(new Set<MessageListener>());
+
+	const subscribe = useCallback((listener: MessageListener) => {
+		listeners.current.add(listener);
+		return () => {
+			listeners.current.delete(listener);
+		};
+	}, []);
 
 	useEffect(() => {
 		const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -71,6 +87,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 			try {
 				const message = JSON.parse(event.data) as LiveMessage;
 				setLastMessage(message);
+				for (const listener of listeners.current) {
+					try {
+						listener(message);
+					} catch {
+						// A faulty listener must not block the others or the cache updates below
+					}
+				}
 				if (!isPageVisible()) {
 					missedWhileHidden = true;
 					return;
@@ -130,7 +153,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 	}, [queryClient]);
 
 	return (
-		<SocketContext.Provider value={{ isConnected, lastMessage }}>
+		<SocketContext.Provider value={{ isConnected, lastMessage, subscribe }}>
 			{children}
 		</SocketContext.Provider>
 	);

@@ -264,6 +264,11 @@ func (h *Hub) SendSyncError(userID int, message string) {
 	})
 }
 
+// SendSyncRefresh tells a user that a background sync stored changes, so open views refetch.
+func (h *Hub) SendSyncRefresh(userID int) {
+	h.SendToUser(userID, Message{Type: "sync:refresh", Data: map[string]interface{}{}})
+}
+
 // ClientCount returns the number of connected clients
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

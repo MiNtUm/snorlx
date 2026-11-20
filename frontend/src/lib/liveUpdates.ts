@@ -55,8 +55,15 @@ export function applyLiveUpdate(queryClient: QueryClient, message: LiveMessage):
 		case "deployment":
 			void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 			return;
+		case "sync:refresh":
+			// A background sync stored repositories, workflows, runs or scores.
+			for (const key of ["repositories", "workflows", "dashboard", "pipelines"]) {
+				void queryClient.invalidateQueries({ queryKey: [key] });
+			}
+			void queryClient.invalidateQueries({ predicate: isStorageBackedRunQuery });
+			return;
 		default:
-			// sync:* events are handled by SyncContext
+			// sync:start, sync:progress, sync:complete and sync:error are handled by SyncContext
 			return;
 	}
 }

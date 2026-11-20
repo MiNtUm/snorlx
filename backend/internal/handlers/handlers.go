@@ -55,6 +55,10 @@ type Handler struct {
 	// wakeActive and wakeDiscovery make the poll loops run early when a page becomes visible.
 	wakeActive    chan struct{}
 	wakeDiscovery chan struct{}
+	// syncs tracks the running sync of each user and when it last started.
+	syncs *syncTracker
+	// wakeAutoSync makes the background sync check for due users when a page becomes visible.
+	wakeAutoSync chan struct{}
 }
 
 // New creates a new Handler
@@ -69,6 +73,8 @@ func New(cfg *config.Config, store storage.Storage, ghClient *github.Client, wsH
 		etags:         newETagCache(),
 		wakeActive:    make(chan struct{}, 1),
 		wakeDiscovery: make(chan struct{}, 1),
+		syncs:         newSyncTracker(),
+		wakeAutoSync:  make(chan struct{}, 1),
 	}
 	if wsHub != nil {
 		wsHub.SetActivationListener(h.UserActivated)
@@ -926,162 +932,6 @@ func (h *Handler) filterRepositories(ghRepos []*gh.Repository) []*gh.Repository 
 	}
 
 	return ghRepos
-}
-
-// SyncRepositories starts a background sync of repositories from GitHub
-// Returns immediately with 202 Accepted, progress is sent via WebSocket
-func (h *Handler) SyncRepositories(w http.ResponseWriter, r *http.Request) {
-	user := h.getUserFromContext(r.Context())
-	if user == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Copy what the background goroutine needs; the request context ends when the handler returns.
-	userID := user.ID
-	accessToken := user.AccessToken
-
-	// Return immediately - sync runs in background
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "started",
-		"message": "Sync started, progress will be sent via WebSocket",
-	})
-
-	// Run sync in background; do not use r.Context(): it is cancelled when the handler returns (after 202),
-	// which would immediately cancel the sync and trigger sync:error. Use Background so sync runs to completion.
-	go h.runSync(context.Background(), userID, accessToken) // #nosec G118 -- intentional: sync must outlive the HTTP request
-}
-
-// runSync performs the actual sync operation in the background. Every repository it stores is
-// granted to userID, which is what makes it visible to that user afterwards.
-func (h *Handler) runSync(ctx context.Context, userID int, accessToken string) {
-
-	// Create GitHub client with user's token
-	token := &oauth2.Token{AccessToken: accessToken}
-	client := h.ghClient.GetUserClient(ctx, token)
-
-	// Fetch user's repositories from GitHub
-	ghRepos, err := h.ghClient.ListUserRepositories(ctx, client)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to fetch repositories from GitHub")
-		h.wsHub.SendSyncError(userID, "Failed to fetch repositories from GitHub")
-		return
-	}
-
-	// Apply filters from config
-	ghRepos = h.filterRepositories(ghRepos)
-
-	total := len(ghRepos)
-	syncedRepos := 0
-	syncedWorkflows := 0
-	syncedRuns := 0
-
-	h.wsHub.SendSyncStart(userID, total)
-
-	for i, ghRepo := range ghRepos {
-		h.wsHub.SendSyncProgress(userID, i, total, ghRepo.GetFullName())
-
-		// Convert and save repository
-		repo := &models.Repository{
-			GitHubID:      ghRepo.GetID(),
-			Name:          ghRepo.GetName(),
-			FullName:      ghRepo.GetFullName(),
-			DefaultBranch: ghRepo.GetDefaultBranch(),
-			HTMLURL:       ghRepo.GetHTMLURL(),
-			IsPrivate:     ghRepo.GetPrivate(),
-			IsActive:      true,
-		}
-		if ghRepo.Description != nil {
-			repo.Description = ghRepo.Description
-		}
-
-		savedRepo, err := h.storage.UpsertRepository(ctx, repo)
-		if err != nil {
-			log.Error().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to save repository")
-			continue
-		}
-		if err := h.storage.GrantRepositoryAccess(ctx, userID, savedRepo.ID); err != nil {
-			log.Error().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to grant repository access")
-			continue
-		}
-		syncedRepos++
-
-		// Fetch and save workflows for this repository
-		owner := ghRepo.GetOwner().GetLogin()
-		repoName := ghRepo.GetName()
-
-		ghWorkflows, err := h.ghClient.ListWorkflows(ctx, client, owner, repoName)
-		if err != nil {
-			log.Warn().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to fetch workflows")
-			continue
-		}
-
-		savedWorkflows := make([]models.Workflow, 0, len(ghWorkflows))
-		for _, ghWorkflow := range ghWorkflows {
-			savedWorkflow, err := h.storage.UpsertWorkflow(ctx, workflowFromGitHub(ghWorkflow, savedRepo.ID))
-			if err != nil {
-				log.Error().Err(err).Str("workflow", ghWorkflow.GetName()).Msg("Failed to save workflow")
-				continue
-			}
-			syncedWorkflows++
-			savedWorkflows = append(savedWorkflows, *savedWorkflow)
-		}
-
-		// Fetch and save workflow runs for this repository (limit to 50 recent runs for faster sync)
-		ghRuns, err := h.ghClient.ListWorkflowRuns(ctx, client, owner, repoName, nil, 50)
-		if err != nil {
-			log.Warn().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to fetch workflow runs")
-			continue
-		}
-
-		workflows := indexWorkflows(savedWorkflows)
-		for _, ghRun := range ghRuns {
-			run, ok := h.runFromGitHub(ghRun, savedRepo.ID, workflows)
-			if !ok {
-				continue
-			}
-			if _, err := h.storage.UpsertRun(ctx, run); err != nil {
-				log.Error().Err(err).Int64("run_id", ghRun.GetID()).Msg("Failed to save workflow run")
-				continue
-			}
-			syncedRuns++
-		}
-
-		// Score repository (documentation, security, CI/CD, etc.)
-		if h.scorer != nil {
-			meta := &scorer.RepoMeta{
-				HasWorkflows:  len(ghWorkflows) > 0,
-				WorkflowNames: make([]string, 0, len(ghWorkflows)),
-				Topics:        ghRepo.Topics,
-			}
-			if ghRepo.PushedAt != nil {
-				t := ghRepo.PushedAt.Time
-				meta.PushedAt = &t
-			}
-			meta.Archived = ghRepo.GetArchived()
-			for _, w := range ghWorkflows {
-				meta.WorkflowNames = append(meta.WorkflowNames, w.GetName())
-			}
-			score, err := h.scorer.ScoreRepository(ctx, client, owner, repoName, savedRepo, meta)
-			if err != nil {
-				log.Warn().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to score repository")
-			} else {
-				if _, err := h.storage.UpsertRepositoryScore(ctx, score); err != nil {
-					log.Error().Err(err).Str("repo", ghRepo.GetFullName()).Msg("Failed to save repository score")
-				}
-			}
-		}
-	}
-
-	log.Info().
-		Int("user_id", userID).
-		Int("repositories", syncedRepos).
-		Int("workflows", syncedWorkflows).
-		Int("runs", syncedRuns).
-		Msg("Sync completed")
-
-	h.wsHub.SendSyncComplete(userID, syncedRepos, syncedWorkflows, syncedRuns)
 }
 
 // runSyncOneRepo syncs workflows and runs for a single repository (light sync).
